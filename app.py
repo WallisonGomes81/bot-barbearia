@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request
+from flask import Flask, request, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
 from database import (
@@ -96,10 +96,17 @@ def cmd_resumo(db):
 
     return texto
 
-# ===== Rota WhatsApp =====
+# ===== Rotas =====
+@app.route("/", methods=["GET"])
+def index():
+    return "<h2>Bot Financeiro no ar ✅</h2>", 200
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
     msg = request.form.get("Body", "").lower().strip()
+    from_number = request.form.get("From")
+    print(f"[LOG] Mensagem recebida de {from_number}: {msg}")
+
     resp = MessagingResponse()
     reply = resp.message()
     db = get_db()
@@ -120,7 +127,8 @@ def whatsapp():
     else:
         reply.body("❓ Comando não reconhecido.\nDigite *ajuda*.")
 
-    return str(resp)
+    # Retorno para Twilio com Content-Type correto
+    return Response(str(resp), mimetype="application/xml")
 
 # ===== Rodar servidor =====
 if __name__ == "__main__":
