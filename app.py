@@ -1,57 +1,19 @@
 import os
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-import sqlite3
+from dotenv import load_dotenv
+from database import (
+    get_db, close_db, init_db,
+    SERVICOS_CATEGORIAS, GASTOS_TIPOS,
+    registrar_servico, registrar_gasto,
+    obter_saldo, obter_servicos, obter_gastos
+)
 
+# ===== Configuração =====
+load_dotenv()
 app = Flask(__name__)
-DB_PATH = "barbearia.db"
-
-# ===== Banco de dados =====
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    db = get_db()
-    
-    # Saldo inicial
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS saldo (
-            id INTEGER PRIMARY KEY,
-            valor REAL
-        )
-    """)
-    db.execute("INSERT OR IGNORE INTO saldo (id, valor) VALUES (1, 0)")
-    
-    # Serviços realizados (receitas)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS servicos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            valor REAL,
-            descricao TEXT,
-            categoria TEXT CHECK(categoria IN ('cabelo','barba','pigmentacao','combo','outros'))
-        )
-    """)
-    
-    # Gastos da barbearia
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS gastos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            valor REAL,
-            descricao TEXT,
-            tipo TEXT CHECK(tipo IN ('investimento','variavel','fixo'))
-        )
-    """)
-    
-    db.commit()
-    db.close()
-
+app.teardown_appcontext(close_db)
 init_db()
-
-# ===== Categorias =====
-SERVICOS_CATEGORIAS = ["cabelo","barba","pigmentacao","combo","outros"]
-GASTOS_TIPOS = ["investimento","variavel","fixo"]
 
 # ===== Comandos =====
 def cmd_oi():
@@ -60,133 +22,88 @@ def cmd_oi():
 def cmd_ajuda():
     return (
         "📌 *Comandos disponíveis:*\n\n"
-        "💰 *Saldo da barbearia:*\n"
-        "• saldo → ver saldo atual da barbearia\n\n"
-        "💈 *Registrar serviços (aumenta saldo):*\n"
-        "• servico VALOR CATEGORIA DESCRIÇÃO → registra receita de serviço\n"
-        "  Ex: servico 50 cabelo corte masculino\n"
-        "  Categorias válidas: cabelo, barba, pigmentacao, combo, outros\n\n"
-        "💸 *Registrar gastos (diminui saldo):*\n"
-        "• gasto VALOR TIPO DESCRIÇÃO → registra gasto da barbearia\n"
-        "  Ex: gasto 200 investimento cadeira nova\n"
-        "  Tipos válidos: investimento, variavel, fixo\n\n"
-        "📊 *Resumo financeiro:*\n"
-        "• resumo → mostra resumo completo de receitas, gastos e saldo\n\n"
-        "❓ Outros:\n"
-        "• ajuda → ver todos os comandos"
+        "💰 saldo → ver saldo atual da barbearia\n"
+        "💈 servico VALOR CATEGORIA DESCRIÇÃO → registra receita\n"
+        "💸 gasto VALOR TIPO DESCRIÇÃO → registra gasto\n"
+        "📊 resumo → mostra resumo completo de receitas, gastos e saldo\n"
+        "❓ ajuda → ver todos os comandos"
     )
 
-
 def cmd_saldo(db):
-    saldo = db.execute("SELECT valor FROM saldo WHERE id = 1").fetchone()
-    return f"💰 Saldo atual da barbearia: R$ {saldo['valor']:.2f}"
+    return f"💰 Saldo atual: R$ {obter_saldo(db):.2f}"
 
 def cmd_servico(db, partes):
     if len(partes) < 4:
-        return "❌ Use: servico VALOR CATEGORIA DESCRIÇÃO\nEx: servico 50 cabelo corte masculino"
-    
+        return "❌ Use: servico VALOR CATEGORIA DESCRIÇÃO"
     try:
         valor = float(partes[1])
         categoria = partes[2].lower()
         descricao = partes[3]
-        
         if categoria not in SERVICOS_CATEGORIAS:
-            return f"❌ Categoria inválida.\nCategorias válidas: {', '.join(SERVICOS_CATEGORIAS)}"
-        
-        # Atualiza saldo
-        saldo = db.execute("SELECT valor FROM saldo WHERE id = 1").fetchone()
-        novo_saldo = saldo["valor"] + valor
-
-        db.execute("UPDATE saldo SET valor = ? WHERE id = 1", (novo_saldo,))
-        db.execute("INSERT INTO servicos (valor, descricao, categoria) VALUES (?, ?, ?)",
-                   (valor, descricao, categoria))
-        db.commit()
-
-        return (f"✅ Serviço registrado!\n\n"
-                f"💸 Valor: R$ {valor:.2f}\n"
-                f"🏷 Categoria: {categoria}\n"
-                f"📝 {descricao}\n"
-                f"💰 Saldo atual: R$ {novo_saldo:.2f}")
-
+            return f"❌ Categoria inválida. {', '.join(SERVICOS_CATEGORIAS)}"
+        registrar_servico(db, valor, categoria, descricao)
+        saldo = obter_saldo(db)
+        return f"✅ Serviço registrado!\n💸 R$ {valor:.2f}\n🏷 {categoria}\n📝 {descricao}\n💰 Saldo: R$ {saldo:.2f}"
     except ValueError:
         return "❌ Valor inválido."
 
 def cmd_gasto(db, partes):
     if len(partes) < 4:
-        return "❌ Use: gasto VALOR TIPO DESCRIÇÃO\nEx: gasto 200 investimento cadeira nova"
-    
+        return "❌ Use: gasto VALOR TIPO DESCRIÇÃO"
     try:
         valor = float(partes[1])
         tipo = partes[2].lower()
         descricao = partes[3]
-        
         if tipo not in GASTOS_TIPOS:
-            return f"❌ Tipo inválido.\nTipos válidos: {', '.join(GASTOS_TIPOS)}"
-        
-        # Atualiza saldo
-        saldo = db.execute("SELECT valor FROM saldo WHERE id = 1").fetchone()
-        novo_saldo = saldo["valor"] - valor
-
-        db.execute("UPDATE saldo SET valor = ? WHERE id = 1", (novo_saldo,))
-        db.execute("INSERT INTO gastos (valor, descricao, tipo) VALUES (?, ?, ?)",
-                   (valor, descricao, tipo))
-        db.commit()
-
-        return (f"✅ Gasto registrado!\n\n"
-                f"💸 Valor: R$ {valor:.2f}\n"
-                f"🏷 Tipo: {tipo}\n"
-                f"📝 {descricao}\n"
-                f"💰 Saldo atual: R$ {novo_saldo:.2f}")
-
+            return f"❌ Tipo inválido. {', '.join(GASTOS_TIPOS)}"
+        registrar_gasto(db, valor, tipo, descricao)
+        saldo = obter_saldo(db)
+        return f"✅ Gasto registrado!\n💸 R$ {valor:.2f}\n🏷 {tipo}\n📝 {descricao}\n💰 Saldo: R$ {saldo:.2f}"
     except ValueError:
         return "❌ Valor inválido."
 
 def cmd_resumo(db):
-    servicos = db.execute("SELECT * FROM servicos").fetchall()
-    gastos = db.execute("SELECT * FROM gastos").fetchall()
-    saldo = db.execute("SELECT valor FROM saldo WHERE id = 1").fetchone()["valor"]
+    servicos = obter_servicos(db)
+    gastos = obter_gastos(db)
+    saldo = obter_saldo(db)
 
-    texto = f"📊 *Resumo Financeiro da Barbearia*\n💰 Saldo atual: R$ {saldo:.2f}\n\n"
-    
+    texto = f"📊 *Resumo Financeiro*\n💰 Saldo atual: R$ {saldo:.2f}\n\n"
+
     if servicos:
-        texto += "💈 *Receitas por serviços:*\n"
-        total_servicos = 0
-        por_categoria = {}
+        texto += "💈 Receitas:\n"
+        total_serv = 0
+        categorias = {}
         for s in servicos:
             texto += f"• R$ {s['valor']:.2f} - {s['descricao']} ({s['categoria']})\n"
-            total_servicos += s["valor"]
-            por_categoria[s["categoria"]] = por_categoria.get(s["categoria"], 0) + s["valor"]
-        texto += f"Total serviços: R$ {total_servicos:.2f}\n"
-        for cat, val in por_categoria.items():
+            total_serv += s['valor']
+            categorias[s['categoria']] = categorias.get(s['categoria'], 0) + s['valor']
+        texto += f"Total: R$ {total_serv:.2f}\n"
+        for cat, val in categorias.items():
             texto += f"• {cat}: R$ {val:.2f}\n"
         texto += "\n"
-    else:
-        texto += "📭 Nenhum serviço registrado.\n\n"
 
     if gastos:
-        texto += "💸 *Gastos da barbearia:*\n"
+        texto += "💸 Gastos:\n"
         total_gastos = 0
-        por_tipo = {}
+        tipos = {}
         for g in gastos:
             texto += f"• R$ {g['valor']:.2f} - {g['descricao']} ({g['tipo']})\n"
-            total_gastos += g["valor"]
-            por_tipo[g["tipo"]] = por_tipo.get(g["tipo"], 0) + g["valor"]
-        texto += f"Total gastos: R$ {total_gastos:.2f}\n"
-        for t, val in por_tipo.items():
+            total_gastos += g['valor']
+            tipos[g['tipo']] = tipos.get(g['tipo'], 0) + g['valor']
+        texto += f"Total: R$ {total_gastos:.2f}\n"
+        for t, val in tipos.items():
             texto += f"• {t}: R$ {val:.2f}\n"
-    else:
-        texto += "📭 Nenhum gasto registrado.\n"
 
     return texto
 
-# ===== Rota principal =====
+# ===== Rota WhatsApp =====
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp():
     msg = request.form.get("Body", "").lower().strip()
     resp = MessagingResponse()
     reply = resp.message()
     db = get_db()
-    partes = msg.split(" ", 3)  # Comando + 3 argumentos possíveis
+    partes = msg.split(" ", 3)
 
     if msg == "oi":
         reply.body(cmd_oi())
@@ -203,7 +120,6 @@ def whatsapp():
     else:
         reply.body("❓ Comando não reconhecido.\nDigite *ajuda*.")
 
-    db.close()
     return str(resp)
 
 # ===== Rodar servidor =====
