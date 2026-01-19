@@ -6,7 +6,9 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Conexão com PostgreSQL via variáveis de ambiente do Render
+# ------------------------------
+# Configuração do PostgreSQL
+# ------------------------------
 DB_HOST = os.environ.get("DB_HOST")
 DB_PORT = os.environ.get("DB_PORT", 5432)
 DB_NAME = os.environ.get("DB_NAME")
@@ -22,7 +24,9 @@ def get_conn():
         password=DB_PASS
     )
 
+# ------------------------------
 # Inicializa banco e tabela
+# ------------------------------
 def init_db():
     conn = get_conn()
     c = conn.cursor()
@@ -41,7 +45,9 @@ def init_db():
 
 init_db()
 
-# Adicionar transação
+# ------------------------------
+# Funções auxiliares
+# ------------------------------
 def add_transacao(tipo, categoria, descricao, valor):
     conn = get_conn()
     c = conn.cursor()
@@ -52,7 +58,6 @@ def add_transacao(tipo, categoria, descricao, valor):
     conn.commit()
     conn.close()
 
-# Calcular saldo
 def get_saldo():
     conn = get_conn()
     c = conn.cursor()
@@ -61,7 +66,6 @@ def get_saldo():
     conn.close()
     return float(saldo)
 
-# Histórico
 def get_historico(limit=10):
     conn = get_conn()
     c = conn.cursor()
@@ -70,29 +74,37 @@ def get_historico(limit=10):
     conn.close()
     return rows
 
-@app.route("/webhook", methods=['POST'])
-def webhook():
-    msg = request.form.get('Body').lower()
+# ------------------------------
+# Rota principal de teste
+# ------------------------------
+@app.route("/")
+def index():
+    return "🤖 Bot financeiro da barbearia online ✅"
+
+# ------------------------------
+# Rota do Twilio WhatsApp
+# ------------------------------
+@app.route("/whatsapp", methods=['POST'])
+def whatsapp_webhook():
+    msg = request.form.get('Body', '').lower()
     resp = MessagingResponse()
 
     try:
         if msg.startswith("entrada"):
-            # Comando: entrada VALOR CATEGORIA DESCRIÇÃO
             parts = msg.split(" ", 3)
             valor = float(parts[1])
             categoria = parts[2] if len(parts) > 2 else "Sem categoria"
             descricao = parts[3] if len(parts) > 3 else "Sem descrição"
             add_transacao("entrada", categoria, descricao, valor)
-            resp.message(f"✅ Entrada registrada: R${valor} - {categoria} - {descricao}")
+            resp.message(f"✅ Entrada registrada: R${valor:.2f} - {categoria} - {descricao}")
 
         elif msg.startswith("saida"):
-            # Comando: saida VALOR CATEGORIA DESCRIÇÃO
             parts = msg.split(" ", 3)
             valor = float(parts[1])
             categoria = parts[2] if len(parts) > 2 else "Sem categoria"
             descricao = parts[3] if len(parts) > 3 else "Sem descrição"
             add_transacao("saida", categoria, descricao, valor)
-            resp.message(f"✅ Saída registrada: R${valor} - {categoria} - {descricao}")
+            resp.message(f"✅ Saída registrada: R${valor:.2f} - {categoria} - {descricao}")
 
         elif msg.startswith("saldo"):
             saldo = get_saldo()
@@ -123,5 +135,8 @@ def webhook():
 
     return str(resp)
 
+# ------------------------------
+# Inicia o Flask
+# ------------------------------
 if __name__ == "__main__":
     app.run(debug=True)
