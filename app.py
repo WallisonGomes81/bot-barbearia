@@ -1,142 +1,136 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-import psycopg2
+import sqlite3
 import os
-from datetime import datetime
 
 app = Flask(__name__)
 
-# ------------------------------
-# Conexão com PostgreSQL via variáveis de ambiente
-# ------------------------------
-DB_HOST = os.environ.get("DB_HOST")
-DB_PORT = os.environ.get("DB_PORT", 5432)
-DB_NAME = os.environ.get("DB_NAME")
-DB_USER = os.environ.get("DB_USER")
-DB_PASS = os.environ.get("DB_PASS")
+# =====================
+# BANCO DE DADOS
+# =====================
+def get_db():
+    conn = sqlite3.connect("finance.db")
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def get_conn():
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS
-    )
-
-# ------------------------------
-# Inicializa banco e tabela
-# ------------------------------
 def init_db():
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS transacoes (
-            id SERIAL PRIMARY KEY,
-            tipo VARCHAR(10),
-            categoria VARCHAR(50),
-            descricao TEXT,
-            valor NUMERIC(10,2),
-            data TIMESTAMP
+    db = get_db()
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS saldo (
+            id INTEGER PRIMARY KEY,
+            valor REAL
         )
-    ''')
-    conn.commit()
-    conn.close()
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS gastos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            valor REAL,
+            descricao TEXT
+        )
+    """)
+    # saldo inicial
+    saldo = db.execute("SELECT * FROM saldo").fetchone()
+    if saldo is None:
+        db.execute("INSERT INTO saldo (id, valor) VALUES (1, 1000)")
+    db.commit()
+    db.close()
 
 init_db()
 
-# ------------------------------
-# Funções do bot
-# ------------------------------
-def add_transacao(tipo, categoria, descricao, valor):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO transacoes (tipo, categoria, descricao, valor, data) VALUES (%s,%s,%s,%s,%s)",
-        (tipo, categoria, descricao, valor, datetime.now())
-    )
-    conn.commit()
-    conn.close()
-
-def get_saldo():
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END) FROM transacoes")
-    saldo = c.fetchone()[0] or 0
-    conn.close()
-    return float(saldo)
-
-def get_historico(limit=10):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT tipo, categoria, descricao, valor, data FROM transacoes ORDER BY data DESC LIMIT %s", (limit,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-# ------------------------------
-# Rota raiz para teste no navegador
-# ------------------------------
+# =====================
+# ROTAS
+# =====================
 @app.route("/")
-def index():
-    return "🤖 Bot financeiro da barbearia online ✅"
+def home():
+    return "🚀 Bot WhatsApp Financeiro rodando com banco"
 
-# ------------------------------
-# Rota do Twilio WhatsApp
-# ------------------------------
-@app.route("/whatsapp", methods=['POST'])
-def whatsapp_webhook():
-    msg = request.form.get('Body', '').lower()
+@app.route("/whatsapp", methods=["POST"])
+def whatsapp():
+    msg = request.form.get("Body", "").lower().strip()
     resp = MessagingResponse()
+    reply = resp.message()
 
-    try:
-        if msg.startswith("entrada"):
-            parts = msg.split(" ", 3)
-            valor = float(parts[1])
-            categoria = parts[2] if len(parts) > 2 else "Sem categoria"
-            descricao = parts[3] if len(parts) > 3 else "Sem descrição"
-            add_transacao("entrada", categoria, descricao, valor)
-            resp.message(f"✅ Entrada registrada: R${valor} - {categoria} - {descricao}")
+    db = get_db()
 
-        elif msg.startswith("saida"):
-            parts = msg.split(" ", 3)
-            valor = float(parts[1])
-            categoria = parts[2] if len(parts) > 2 else "Sem categoria"
-            descricao = parts[3] if len(parts) > 3 else "Sem descrição"
-            add_transacao("saida", categoria, descricao, valor)
-            resp.message(f"✅ Saída registrada: R${valor} - {categoria} - {descricao}")
+    # ===== COMANDOS =====
 
-        elif msg.startswith("saldo"):
-            saldo = get_saldo()
-            resp.message(f"💰 Saldo atual: R${saldo:.2f}")
+    if msg == "oi":
+        reply.body(
+            "🤖 Olá! Eu sou seu bot financeiro.\n\n"
+            "Digite *ajuda* para ver os comandos."
+        )
 
-        elif msg.startswith("historico"):
-            historico = get_historico(10)
-            if not historico:
-                resp.message("📄 Nenhuma transação registrada.")
-            else:
-                texto = "📄 Últimas transações:\n"
-                for t in historico:
-                    tipo, cat, desc, val, data = t
-                    texto += f"{tipo.upper()} | {cat} | {desc} | R${val:.2f} | {data.strftime('%d/%m %H:%M')}\n"
-                resp.message(texto)
+    elif msg == "ajuda":
+        reply.body(
+            "📌 *Comandos disponíveis:*\n\n"
+            "• saldo → ver saldo\n"
+            "• gasto VALOR DESCRIÇÃO\n"
+            "  Ex: gasto 50 mercado\n"
+            "• resumo → ver gastos\n"
+        )
 
-        else:
-            resp.message(
-                "📌 Comandos disponíveis:\n"
-                "entrada VALOR CATEGORIA DESCRIÇÃO\n"
-                "saida VALOR CATEGORIA DESCRIÇÃO\n"
-                "saldo\n"
-                "historico"
+    elif msg == "saldo":
+        saldo = db.execute("SELECT valor FROM saldo WHERE id = 1").fetchone()
+        reply.body(f"💰 Seu saldo atual é: R$ {saldo['valor']:.2f}")
+
+    elif msg.startswith("gasto"):
+        partes = msg.split(" ", 2)
+
+        if len(partes) < 3:
+            reply.body(
+                "❌ Use: gasto VALOR DESCRIÇÃO\n"
+                "Ex: gasto 30 almoço"
             )
+        else:
+            try:
+                valor = float(partes[1])
+                descricao = partes[2]
 
-    except Exception as e:
-        resp.message(f"❌ Erro: {e}")
+                # Atualiza saldo
+                saldo = db.execute("SELECT valor FROM saldo WHERE id = 1").fetchone()
+                novo_saldo = saldo["valor"] - valor
 
+                db.execute("UPDATE saldo SET valor = ? WHERE id = 1", (novo_saldo,))
+                db.execute(
+                    "INSERT INTO gastos (valor, descricao) VALUES (?, ?)",
+                    (valor, descricao)
+                )
+                db.commit()
+
+                reply.body(
+                    f"✅ Gasto registrado!\n\n"
+                    f"💸 Valor: R$ {valor:.2f}\n"
+                    f"📝 {descricao}\n"
+                    f"💰 Saldo: R$ {novo_saldo:.2f}"
+                )
+            except ValueError:
+                reply.body("❌ Valor inválido.")
+
+    elif msg == "resumo":
+        gastos = db.execute("SELECT * FROM gastos").fetchall()
+
+        if not gastos:
+            reply.body("📭 Nenhum gasto registrado.")
+        else:
+            texto = "📊 *Resumo de gastos:*\n\n"
+            total = 0
+
+            for g in gastos:
+                texto += f"• R$ {g['valor']:.2f} - {g['descricao']}\n"
+                total += g["valor"]
+
+            texto += f"\n💸 Total gasto: R$ {total:.2f}"
+            reply.body(texto)
+
+    else:
+        reply.body(
+            "❓ Comando não reconhecido.\n"
+            "Digite *ajuda*."
+        )
+
+    db.close()
     return str(resp)
 
-# ------------------------------
-# Executa localmente
-# ------------------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
