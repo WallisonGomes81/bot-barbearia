@@ -7,7 +7,7 @@ from datetime import datetime
 app = Flask(__name__)
 
 # ------------------------------
-# Configuração do PostgreSQL
+# Conexão com PostgreSQL via variáveis de ambiente
 # ------------------------------
 DB_HOST = os.environ.get("DB_HOST")
 DB_PORT = os.environ.get("DB_PORT", 5432)
@@ -46,7 +46,7 @@ def init_db():
 init_db()
 
 # ------------------------------
-# Funções auxiliares
+# Funções do bot
 # ------------------------------
 def add_transacao(tipo, categoria, descricao, valor):
     conn = get_conn()
@@ -75,7 +75,7 @@ def get_historico(limit=10):
     return rows
 
 # ------------------------------
-# Rota principal de teste
+# Rota raiz para teste no navegador
 # ------------------------------
 @app.route("/")
 def index():
@@ -96,7 +96,7 @@ def whatsapp_webhook():
             categoria = parts[2] if len(parts) > 2 else "Sem categoria"
             descricao = parts[3] if len(parts) > 3 else "Sem descrição"
             add_transacao("entrada", categoria, descricao, valor)
-            resp.message(f"✅ Entrada registrada: R${valor:.2f} - {categoria} - {descricao}")
+            resp.message(f"✅ Entrada registrada: R${valor} - {categoria} - {descricao}")
 
         elif msg.startswith("saida"):
             parts = msg.split(" ", 3)
@@ -104,7 +104,7 @@ def whatsapp_webhook():
             categoria = parts[2] if len(parts) > 2 else "Sem categoria"
             descricao = parts[3] if len(parts) > 3 else "Sem descrição"
             add_transacao("saida", categoria, descricao, valor)
-            resp.message(f"✅ Saída registrada: R${valor:.2f} - {categoria} - {descricao}")
+            resp.message(f"✅ Saída registrada: R${valor} - {categoria} - {descricao}")
 
         elif msg.startswith("saldo"):
             saldo = get_saldo()
@@ -136,7 +136,7 @@ def whatsapp_webhook():
     return str(resp)
 
 # ------------------------------
-# Inicia o Flask
+# Executa localmente
 # ------------------------------
 if __name__ == "__main__":
     app.run(debug=True)
